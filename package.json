@@ -1,0 +1,31 @@
+{
+  "name": "acadalert-backend",
+  "version": "1.0.0",
+  "description": "(Node/Express + cron scheduler + FCM send) supabase psw-what is a mark?(suimark@1.11)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AcadAlert-Team/acadalert-backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/AcadAlert-Team/acadalert-backend/issues"
+  },
+  "homepage": "https://github.com/AcadAlert-Team/acadalert-backend#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.98.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
