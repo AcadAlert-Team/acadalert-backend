@@ -1,0 +1,22 @@
+{
+  "semester_start_date": "2025-12-01",
+  "semester_end_date": "2026-03-27",
+  "holidays_and_exams": [
+    "2025-12-22", "2025-12-23", "2025-12-24", "2025-12-25", "2025-12-26", 
+    "2026-01-02", 
+    "2026-01-17", "2026-01-19", "2026-01-20", "2026-01-21", "2026-01-22", "2026-01-23", "2026-01-24",
+    "2026-01-26", 
+    "2026-01-27", "2026-01-28", "2026-01-29", "2026-01-30", "2026-01-31",
+    "2026-02-10", 
+    "2026-02-16", "2026-02-17", 
+    "2026-03-18", "2026-03-19", 
+    "2026-03-20"  
+  ],
+  "timetable": {
+    "Monday": ["AAD", "MENT", "CD", "CGIP", "ELEC", "CCW"],
+    "Tuesday": ["NETWORKING_LAB", "NETWORKING_LAB", "NETWORKING_LAB", "IEFT", "HNRS_MNR", "HNRS_MNR"],
+    "Wednesday": ["ELEC", "AAD", "CD", "CGIP", "IEFT", "CGIP"],
+    "Thursday": ["CD", "IEFT", "ELEC", "NETWORKING_LAB", "NETWORKING_LAB", "NETWORKING_LAB"],
+    "Friday": ["AAD", "CGIP", "AAD", "CD", "HNRS_MNR", "HNRS_MNR"]
+  }
+}
