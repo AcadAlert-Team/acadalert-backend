@@ -4,7 +4,7 @@ const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const { calculateClasses, collegeConfig } = require('./attendanceCalculator');
-
+const admin = require('./firebase');
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -178,6 +178,67 @@ app.get('/api/subject-analysis/:student_id', async (req, res) => {
        console.error("Subject Analysis Error:", error);
        res.status(500).json({ error: "Failed to run subject analysis" });
    }
+});
+
+// ---------------------------------------------------------
+// Endpoint 5: Save the FCM Token to Supabase (POST)
+// ---------------------------------------------------------
+app.post('/api/notifications/register', async (req, res) => {
+    const { userId, fcmToken } = req.body;
+
+    if (!userId || !fcmToken) {
+        return res.status(400).json({ error: 'Missing userId or fcmToken' });
+    }
+
+    try {
+        // Added .select() to force it to return the updated row
+        const { data, error: dbError } = await supabase
+            .from('profiles')
+            .update({ fcm_token: fcmToken })
+            .eq('id', userId)
+            .select();
+
+        if (dbError) throw dbError;
+
+        // If data is empty, it means the ID didn't exist or RLS blocked it
+        if (!data || data.length === 0) {
+            return res.status(404).json({ error: 'User not found or update blocked by RLS' });
+        }
+
+        console.log(`Successfully registered token for user ${userId}`);
+        res.status(200).json({ message: 'Token registered successfully', data });
+    } catch (error) {
+        console.error('Error saving token:', error);
+        res.status(500).json({ error: 'Failed to register token' });
+    }
+});
+
+// ---------------------------------------------------------
+// Endpoint 6: Trigger a Push Notification (POST)
+// ---------------------------------------------------------
+app.post('/api/notifications/send', async (req, res) => {
+    const { targetToken, title, body } = req.body;
+
+    if (!targetToken) {
+        return res.status(400).json({ error: 'Target token is required' });
+    }
+
+    const message = {
+        notification: {
+            title: title || 'AcadAlert Update',
+            body: body || 'Check your dashboard for new insights.'
+        },
+        token: targetToken
+    };
+
+    try {
+        const response = await admin.messaging().send(message);
+        console.log('Successfully sent message:', response);
+        res.status(200).json({ success: true, messageId: response });
+    } catch (error) {
+        console.error('Error sending message:', error);
+        res.status(500).json({ error: 'Failed to send notification' });
+    }
 });
 
 const PORT = process.env.PORT || 5001;
