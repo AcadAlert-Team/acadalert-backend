@@ -57,125 +57,94 @@ app.post("/api/sync-attendance", async (req, res) => {
   }
 });
 
-// Endpoint 2: Load Dashboard Data (Frontend GETs from this)
-app.get("/api/dashboard/:student_id", async (req, res) => {
-  const { student_id } = req.params;
-
-  // 1. Get the student's base info
-  const { data: student, error: studentError } = await supabase
-    .from("students")
-    .select("*")
-    .eq("id", student_id)
-    .single();
-
-  if (studentError) return res.status(404).json({ error: "Student not found" });
-
-  // 2. Get their attendance records
-  const { data: attendance, error: attError } = await supabase
-    .from("attendance_logs")
-    .select("status")
-    .eq("student_id", student_id);
-
-  // 3. Calculate Attendance Percentage
-  let attendancePercentage = 100;
-  if (attendance && attendance.length > 0) {
-    const presentCount = attendance.filter(
-      (a) => a.status === "Present",
-    ).length;
-    attendancePercentage = Math.round((presentCount / attendance.length) * 100);
-  }
-
-  // ---------------------------------------------------------
-  // 4. NEW: Request Prediction from the Python ML Server
-  // ---------------------------------------------------------
-  let riskLevel = "UNKNOWN";
-  let aiInsight = "AI Prediction currently unavailable.";
-
+// ---------------------------------------------------------
+// Endpoint 2: Fetch Single Student Attendance (GET)
+// THIS FIXES YOUR 404 ERROR!
+// ---------------------------------------------------------
+app.get("/api/attendance/:student_id", async (req, res) => {
   try {
-    // MATCHING THE MODEL SPEC EXACTLY
-    const mlPayload = {
-      attendance_rate: attendancePercentage,
-      test_scores: student.test_score || 0,
-      backlogs: student.backlogs || 0,
-      assignment_score: student.assignment_score || 15.0,
-    };
+    const { student_id } = req.params;
 
-    const mlResponse = await fetch("http://127.0.0.1:8000/predict-dropout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(mlPayload),
-    });
+    const { data, error } = await supabase
+      .from("attendance_logs")
+      .select("*")
+      .eq("student_id", student_id)
+      .single();
 
-    if (mlResponse.ok) {
-      const mlData = await mlResponse.json();
-      riskLevel = mlData.risk_level;
-      aiInsight = mlData.ai_insight;
-    } else {
-      console.error("FastAPI returned an error:", mlResponse.statusText);
+    if (error) {
+      // If no attendance record exists yet, return empty/zeroed data rather than crashing
+      return res.status(200).json({
+        cgip_attended: 0,
+        cd_attended: 0,
+        ieft_attended: 0,
+        aad_attended: 0,
+        elec_attended: 0,
+      });
     }
-  } catch (error) {
-    console.error("Could not connect to Python ML Server:", error.message);
-  }
 
-  // 5. Send the final compiled data back to the Frontend
-  res.status(200).json({
-    student_name: student.name,
-    attendance_percentage: attendancePercentage,
-    cgpa: student.cgpa,
-    backlogs: student.backlogs,
-    risk_level: riskLevel,
-    ai_insight: aiInsight,
-  });
+    res.status(200).json(data);
+  } catch (error) {
+    console.error("Fetch Attendance Error:", error);
+    res.status(500).json({ error: "Failed to fetch attendance data" });
+  }
 });
 
 // ---------------------------------------------------------
-// Endpoint 3: Load Dashboard & Run ML Model (GET)
+// Endpoint 3: Load Dashboard Data (Merged & Fixed)
 // ---------------------------------------------------------
 app.get("/api/dashboard/:student_id", async (req, res) => {
   try {
     const { student_id } = req.params;
 
+    // 1. Get the student's base info
     const { data: student, error: studentError } = await supabase
       .from("students")
       .select("*")
       .eq("id", student_id)
       .single();
-    if (studentError) throw studentError;
 
+    if (studentError) throw new Error("Student not found");
+
+    // 2. Get their attendance records
     const { data: attendance } = await supabase
       .from("attendance_logs")
       .select("*")
       .eq("student_id", student_id)
       .single();
 
+    // 3. Calculate Overall Attendance Percentage
     let attendancePercentage = 100;
+
     if (attendance) {
       const totalAttended =
-        attendance.cgip_attended +
-        attendance.cd_attended +
-        attendance.ieft_attended +
-        attendance.aad_attended +
-        attendance.elec_attended;
+        (attendance.cgip_attended || 0) +
+        (attendance.cd_attended || 0) +
+        (attendance.ieft_attended || 0) +
+        (attendance.aad_attended || 0) +
+        (attendance.elec_attended || 0);
+
       const classesHeldSoFar = calculateClasses(
         collegeConfig.semester_start_date,
         new Date().toISOString().split("T")[0],
       );
+
       const totalHeld =
-        classesHeldSoFar.CGIP +
-        classesHeldSoFar.CD +
-        classesHeldSoFar.IEFT +
-        classesHeldSoFar.AAD +
-        classesHeldSoFar.ELEC;
+        (classesHeldSoFar.CGIP || 0) +
+        (classesHeldSoFar.CD || 0) +
+        (classesHeldSoFar.IEFT || 0) +
+        (classesHeldSoFar.AAD || 0) +
+        (classesHeldSoFar.ELEC || 0);
 
       if (totalHeld > 0) {
-        attendancePercentage = parseFloat(
-          ((totalAttended / totalHeld) * 100).toFixed(2),
-        );
+        attendancePercentage = Math.round((totalAttended / totalHeld) * 100);
       }
+    } else {
+      attendancePercentage = 0; // No attendance logged yet
     }
 
+    // 4. Request Prediction from Python ML Server
     let riskLevel = "UNKNOWN";
-    let aiInsight = "Could not reach AI model.";
+    let aiInsight = "AI Prediction currently unavailable.";
     let confidenceScores = {};
 
     try {
@@ -183,22 +152,26 @@ app.get("/api/dashboard/:student_id", async (req, res) => {
         "http://127.0.0.1:8000/predict-dropout",
         {
           attendance_rate: attendancePercentage,
-          test_scores: student.test_scores || 0,
+          test_scores: student.test_scores || 100,
           backlogs: student.backlogs || 0,
-          assignment_score: student.assignment_score || 0,
+          assignment_score: student.assignment_score || 15,
         },
       );
 
-      riskLevel = mlResponse.data.risk_label;
-      aiInsight = mlResponse.data.ai_insight;
-      confidenceScores = mlResponse.data.confidence;
+      // Extracting based on both of your previous attempts
+      riskLevel =
+        mlResponse.data.risk_level || mlResponse.data.risk_label || "UNKNOWN";
+      aiInsight = mlResponse.data.ai_insight || "No insight provided";
+      confidenceScores = mlResponse.data.confidence || {};
     } catch (mlError) {
-      console.error("Flask API Unreachable");
+      console.error("FastAPI API Unreachable");
     }
 
+    // 5. Send compiled data to Frontend
     res.status(200).json({
       student_name: student.name,
-      attendance_rate: attendancePercentage,
+      attendance_percentage: attendancePercentage,
+      cgpa: student.cgpa,
       test_scores: student.test_scores,
       assignment_score: student.assignment_score,
       backlogs: student.backlogs,
@@ -208,12 +181,14 @@ app.get("/api/dashboard/:student_id", async (req, res) => {
     });
   } catch (error) {
     console.error("Dashboard Error:", error);
-    res.status(500).json({ error: "Failed to load dashboard data" });
+    res
+      .status(500)
+      .json({ error: error.message || "Failed to load dashboard data" });
   }
 });
 
 // ---------------------------------------------------------
-// Endpoint 4: Subject-Wise Micro Analysis (GET)
+// Endpoint 4: Subject-Wise Micro Analysis
 // ---------------------------------------------------------
 app.get("/api/subject-analysis/:student_id", async (req, res) => {
   try {
@@ -235,16 +210,23 @@ app.get("/api/subject-analysis/:student_id", async (req, res) => {
     );
 
     const analyze = (id, name, attended, heldSoFar, totalExpected) => {
+      // Ensure we don't divide by zero or pass nulls
+      const safeAttended = attended || 0;
+      const safeHeldSoFar = heldSoFar || 0;
+      const safeTotalExpected = totalExpected || 0;
+
       const percent =
-        heldSoFar > 0 ? Math.round((attended / heldSoFar) * 100) : 0;
-      const requiredFor75 = Math.ceil(0.75 * totalExpected);
-      const classesLeft = totalExpected - heldSoFar;
+        safeHeldSoFar > 0
+          ? Math.round((safeAttended / safeHeldSoFar) * 100)
+          : 0;
+      const requiredFor75 = Math.ceil(0.75 * safeTotalExpected);
+      const classesLeft = safeTotalExpected - safeHeldSoFar;
 
       let status = "good";
       let inference = "";
 
       if (percent < 75) {
-        const needed = requiredFor75 - attended;
+        const needed = requiredFor75 - safeAttended;
         if (needed > classesLeft) {
           status = "critical";
           inference = `CRITICAL: Cannot reach 75%. You need ${needed} classes, but only ${classesLeft} are left.`;
@@ -253,7 +235,7 @@ app.get("/api/subject-analysis/:student_id", async (req, res) => {
           inference = `WARNING: Falling behind. Must attend ${needed} of the next ${classesLeft} classes.`;
         }
       } else {
-        const canSkip = attended + classesLeft - requiredFor75;
+        const canSkip = safeAttended + classesLeft - requiredFor75;
         if (canSkip > 0) {
           inference = `SAFE: You can safely skip ${canSkip} classes and remain above 75%.`;
         } else {
@@ -264,8 +246,8 @@ app.get("/api/subject-analysis/:student_id", async (req, res) => {
       return {
         id,
         name,
-        attended,
-        held: heldSoFar,
+        attended: safeAttended,
+        held: safeHeldSoFar,
         percent,
         status,
         inference,
