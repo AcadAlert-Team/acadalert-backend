@@ -317,6 +317,125 @@ app.get("/api/subject-analysis/:student_id", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------
+// Endpoint 5: Load All Students for Faculty Dashboard (GET)
+// ---------------------------------------------------------
+app.get("/api/faculty/students", async (req, res) => {
+  try {
+    // 1. Fetch ALL students
+    const { data: students, error: studentError } = await supabase
+      .from("students")
+      .select("id, name, backlogs");
+
+    if (studentError) throw studentError;
+
+    // 2. Fetch ALL attendance logs
+    const { data: attendanceLogs, error: attError } = await supabase
+      .from("attendance_logs")
+      .select("*");
+
+    if (attError) throw attError;
+
+    // 3. Calculate total classes held to date using your existing logic
+    const classesHeldSoFar = calculateClasses(
+      collegeConfig.semester_start_date,
+      new Date().toISOString().split("T")[0]
+    );
+    const totalHeld = 
+      classesHeldSoFar.CGIP + 
+      classesHeldSoFar.CD + 
+      classesHeldSoFar.IEFT + 
+      classesHeldSoFar.AAD + 
+      classesHeldSoFar.ELEC;
+
+    // 4. Map the data together for the React Native UI
+    const formattedStudents = students.map(student => {
+      const record = attendanceLogs.find(log => log.student_id === student.id);
+      
+      let attendancePercentage = 0;
+      if (record && totalHeld > 0) {
+        const totalAttended = 
+          (record.cgip_attended || 0) + 
+          (record.cd_attended || 0) + 
+          (record.ieft_attended || 0) + 
+          (record.aad_attended || 0) + 
+          (record.elec_attended || 0);
+          
+        attendancePercentage = Math.round((totalAttended / totalHeld) * 100);
+      }
+
+      // 5. Basic Risk Assessment for the list view
+      // (Running the Python ML model for 60 students at once would slow down the app, 
+      // so we use a fast heuristic here for the overview list)
+      let risk = "Low";
+      if (attendancePercentage < 65 || student.backlogs > 2) risk = "High";
+      else if (attendancePercentage < 75 || student.backlogs > 0) risk = "Medium";
+
+      return {
+        id: student.id,
+        name: student.name,
+        attendance: attendancePercentage,
+        risk: risk
+      };
+    });
+
+    res.status(200).json(formattedStudents);
+  } catch (error) {
+    console.error("Error fetching faculty students:", error);
+    res.status(500).json({ error: "Failed to load student list" });
+  }
+});
+
+// ---------------------------------------------------------
+// Endpoint 6: Save Bulk Attendance (POST)
+// ---------------------------------------------------------
+app.post("/api/faculty/bulk-attendance", async (req, res) => {
+  try {
+    const { attendance, date } = req.body;
+    
+    // Fetch current attendance logs to increment them
+    const { data: currentLogs, error: fetchError } = await supabase
+      .from("attendance_logs")
+      .select("*");
+
+    if (fetchError) throw fetchError;
+
+    const updates = [];
+
+    for (const [studentId, isPresent] of Object.entries(attendance)) {
+      if (isPresent) {
+        const studentLog = currentLogs.find(log => log.student_id === studentId);
+        
+        // IMPORTANT NOTE: Because your database tracks attendance by SUBJECT 
+        // (cgip_attended, cd_attended), a "Bulk Mark" without a subject is tricky.
+        // For now, this will add +1 to a specific subject (e.g., ELEC) so you can test it.
+        // Later, we should add a dropdown in the app so the teacher selects WHICH subject they are marking!
+        
+        const currentElec = studentLog ? (studentLog.elec_attended || 0) : 0;
+
+        updates.push({
+          student_id: studentId,
+          elec_attended: currentElec + 1, // Incrementing Elective classes as a test
+          last_synced: new Date().toISOString()
+        });
+      }
+    }
+
+    if (updates.length > 0) {
+      const { error: updateError } = await supabase
+        .from("attendance_logs")
+        .upsert(updates, { onConflict: "student_id" });
+
+      if (updateError) throw updateError;
+    }
+
+    res.status(200).json({ message: "Attendance saved to Supabase successfully" });
+  } catch (error) {
+    console.error("Bulk Attendance Error:", error);
+    res.status(500).json({ error: "Failed to process bulk attendance" });
+  }
+});
+
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`AcadAlert Backend running on port ${PORT}`);
