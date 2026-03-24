@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
 const axios = require("axios");
+const cron = require("node-cron");
 const { calculateClasses, collegeConfig } = require("./attendanceCalculator");
 const admin = require("./firebase"); // <-- Your crucial push notification import!
 
@@ -318,6 +319,92 @@ app.post("/api/notifications/send", async (req, res) => {
         console.error("Error sending message:", error);
         res.status(500).json({ error: "Failed to send notification" });
     }
+});
+
+// ---------------------------------------------------------
+// Endpoint 7: The Automated Assignment Watcher (Cron Job)
+// ---------------------------------------------------------
+// This runs every single minute ('* * * * *')
+cron.schedule("* * * * *", async () => {
+  console.log("🕰️ Checking for due assignments...");
+  const now = new Date().toISOString();
+
+  try {
+    const { data: assignments, error } = await supabase
+      .from("pending_assignments")
+      .select(
+        `
+        id, 
+        title, 
+        user_id,
+        profiles ( fcm_token )
+      `,
+      )
+      .lte("due_date", now)
+      .eq("is_completed", false)
+      .eq("notification_sent", false);
+
+    if (error) throw error;
+
+    if (assignments && assignments.length > 0) {
+      console.log(
+        `🚨 Found ${assignments.length} assignments due! Sending alerts...`,
+      );
+
+      for (const task of assignments) {
+        console.log(
+          `➡️ Processing task: "${task.title}" for user: ${task.user_id}`,
+        );
+        console.log("➡️ Joined profile data:", task.profiles);
+
+        let token = null;
+        if (Array.isArray(task.profiles)) {
+          token = task.profiles[0]?.fcm_token;
+        } else {
+          token = task.profiles?.fcm_token;
+        }
+
+        console.log("➡️ Extracted Token:", token);
+
+        if (!token) {
+          console.log(
+            "❌ FAILED: Token is missing or Supabase RLS blocked the profile read!",
+          );
+          continue;
+        }
+
+        try {
+          console.log("➡️ Attempting to send payload to Firebase...");
+          const message = {
+            notification: {
+              title: "Assignment Due! ⏰",
+              body: `Your task "${task.title}" is due right now!`,
+            },
+            token: token,
+          };
+
+          await admin.messaging().send(message);
+          console.log("✅ Firebase success! Updating Supabase...");
+
+          const { error: updateError } = await supabase
+            .from("pending_assignments")
+            .update({ notification_sent: true })
+            .eq("id", task.id);
+
+          if (updateError) throw updateError;
+
+          console.log(`✅ Database updated for task: ${task.title}`);
+        } catch (innerError) {
+          console.error(
+            `❌ FIREBASE/DB ERROR for task ${task.id}:`,
+            innerError.message,
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Cron job error:", err);
+  }
 });
 
 const PORT = process.env.PORT || 5001;
