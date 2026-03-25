@@ -441,7 +441,7 @@ cron.schedule("* * * * *", async () => {
         id, 
         title, 
         user_id,
-        profiles ( fcm_token )
+        students ( fcm_token )
       `,
       )
       .lte("due_date", now)
@@ -459,13 +459,13 @@ cron.schedule("* * * * *", async () => {
         console.log(
           `➡️ Processing task: "${task.title}" for user: ${task.user_id}`,
         );
-        console.log("➡️ Joined profile data:", task.profiles);
+        console.log("➡️ Joined student data:", task.students);
 
         let token = null;
-        if (Array.isArray(task.profiles)) {
-          token = task.profiles[0]?.fcm_token;
+        if (Array.isArray(task.students)) {
+          token = task.students[0]?.fcm_token;
         } else {
-          token = task.profiles?.fcm_token;
+          token = task.students?.fcm_token;
         }
 
         console.log("➡️ Extracted Token:", token);
