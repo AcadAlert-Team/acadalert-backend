@@ -181,6 +181,54 @@ app.get("/api/dashboard/:student_id", async (req, res) => {
   }
 });
 
+// GET list of all students for the faculty dashboard
+app.get('/api/faculty/students', async (req, res) => {
+  try {
+    // 1. Fetch all records from your Supabase 'students' table
+    const { data: studentsData, error } = await supabase
+      .from('students')
+      .select('*');
+
+    if (error) {
+      console.error("Supabase error:", error);
+      return res.status(500).json({ error: "Failed to fetch students from database" });
+    }
+
+    // 2. Format the data to match exactly what the frontend React Native code expects
+    const formattedStudents = studentsData.map(student => {
+      
+      // Calculate a dynamic risk level based on the schema data you have
+      let calculatedRisk = 'Low';
+      if (student.backlogs >= 2 || student.cgpa < 6.0) {
+        calculatedRisk = 'High';
+      } else if (student.backlogs === 1 || student.cgpa < 7.5) {
+        calculatedRisk = 'Medium';
+      }
+
+      return {
+        id: student.id,
+        name: student.name,
+        // Mocking attendance for now since it's not in the students table schema
+        attendance: 80, 
+        risk: calculatedRisk, 
+        
+        // Sending the rest of the actual data just in case you need it later
+        cgpa: student.cgpa,
+        backlogs: student.backlogs,
+        test_scores: student.test_scores,
+        assignment_score: student.assignment_score
+      };
+    });
+
+    // 3. Send the formatted array back to the app
+    res.json(formattedStudents);
+
+  } catch (error) {
+    console.error("Error fetching students:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ---------------------------------------------------------
 // Endpoint 4: Subject-Wise Micro Analysis
 // ---------------------------------------------------------
