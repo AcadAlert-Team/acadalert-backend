@@ -90,7 +90,7 @@ app.get("/api/attendance/:student_id", async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// Endpoint 3: Load Dashboard Data 
+// Endpoint 3: Load Dashboard Data
 // ---------------------------------------------------------
 app.get("/api/dashboard/:student_id", async (req, res) => {
   try {
@@ -136,7 +136,7 @@ app.get("/api/dashboard/:student_id", async (req, res) => {
         attendancePercentage = Math.round((totalAttended / totalHeld) * 100);
       }
     } else {
-      attendancePercentage = 0; 
+      attendancePercentage = 0;
     }
 
     let riskLevel = "UNKNOWN";
@@ -182,50 +182,74 @@ app.get("/api/dashboard/:student_id", async (req, res) => {
 });
 
 // GET list of all students for the faculty dashboard
-app.get('/api/faculty/students', async (req, res) => {
+app.get("/api/faculty/students", async (req, res) => {
   try {
-    // 1. Fetch all records from your Supabase 'students' table
-    const { data: studentsData, error } = await supabase
-      .from('students')
-      .select('*');
+    // 1. Fetch all students
+    const { data: students, error: studentError } = await supabase
+      .from("students")
+      .select("*");
+    if (studentError) throw studentError;
 
-    if (error) {
-      console.error("Supabase error:", error);
-      return res.status(500).json({ error: "Failed to fetch students from database" });
-    }
+    // 2. Fetch all attendance logs
+    const { data: attendanceLogs, error: attError } = await supabase
+      .from("attendance_logs")
+      .select("*");
+    if (attError) throw attError;
 
-    // 2. Format the data to match exactly what the frontend React Native code expects
-    const formattedStudents = studentsData.map(student => {
-      
-      // Calculate a dynamic risk level based on the schema data you have
-      let calculatedRisk = 'Low';
-      if (student.backlogs >= 2 || student.cgpa < 6.0) {
-        calculatedRisk = 'High';
-      } else if (student.backlogs === 1 || student.cgpa < 7.5) {
-        calculatedRisk = 'Medium';
+    // 3. Calculate how many total classes have happened this semester
+    const classesHeldSoFar = calculateClasses(
+      collegeConfig.semester_start_date,
+      new Date().toISOString().split("T")[0],
+    );
+
+    const totalHeld =
+      (classesHeldSoFar.CGIP || 0) +
+      (classesHeldSoFar.CD || 0) +
+      (classesHeldSoFar.IEFT || 0) +
+      (classesHeldSoFar.AAD || 0) +
+      (classesHeldSoFar.ELEC || 0);
+
+    // 4. Map the math to every single student
+    const formattedStudents = students.map((student) => {
+      // Find this specific student's log
+      const log = attendanceLogs.find((a) => a.student_id === student.id);
+
+      let attendancePercentage = 0; // Default to 0 if no logs exist yet
+
+      if (log && totalHeld > 0) {
+        const totalAttended =
+          (log.cgip_attended || 0) +
+          (log.cd_attended || 0) +
+          (log.ieft_attended || 0) +
+          (log.aad_attended || 0) +
+          (log.elec_attended || 0);
+
+        attendancePercentage = Math.round((totalAttended / totalHeld) * 100);
       }
 
+      // 5. Basic risk heuristic for the list view
+      // (We skip hitting the Python ML server here to keep the list loading instantly)
+      let listRisk = "LOW";
+      if (attendancePercentage < 75 || student.backlogs > 2) {
+        listRisk = "HIGH";
+      } else if (attendancePercentage < 80 || student.backlogs > 0) {
+        listRisk = "MEDIUM";
+      }
+
+      // Return the exact keys your React Native app expects!
       return {
         id: student.id,
         name: student.name,
-        // Mocking attendance for now since it's not in the students table schema
-        attendance: 80, 
-        risk: calculatedRisk, 
-        
-        // Sending the rest of the actual data just in case you need it later
+        attendance: attendancePercentage, // <--- No more hardcoded 80!
+        risk: listRisk,
         cgpa: student.cgpa,
-        backlogs: student.backlogs,
-        test_scores: student.test_scores,
-        assignment_score: student.assignment_score
       };
     });
 
-    // 3. Send the formatted array back to the app
-    res.json(formattedStudents);
-
+    res.status(200).json(formattedStudents);
   } catch (error) {
-    console.error("Error fetching students:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Fetch Faculty Students Error:", error);
+    res.status(500).json({ error: "Failed to fetch student list" });
   }
 });
 
@@ -240,7 +264,7 @@ app.get("/api/subject-analysis/:student_id", async (req, res) => {
       .eq("student_id", req.params.student_id)
       .single();
 
-    if (!attendance) return res.status(200).json([]); 
+    if (!attendance) return res.status(200).json([]);
 
     const held = calculateClasses(
       collegeConfig.semester_start_date,
@@ -296,11 +320,41 @@ app.get("/api/subject-analysis/:student_id", async (req, res) => {
     };
 
     const analysisData = [
-      analyze("1", "Computer Graphics (CGIP)", attendance.cgip_attended, held.CGIP, total.CGIP),
-      analyze("2", "Compiler Design (CD)", attendance.cd_attended, held.CD, total.CD),
-      analyze("3", "Industrial Economics (IEFT)", attendance.ieft_attended, held.IEFT, total.IEFT),
-      analyze("4", "Algorithm Analysis (AAD)", attendance.aad_attended, held.AAD, total.AAD),
-      analyze("5", "Elective (ELEC)", attendance.elec_attended, held.ELEC, total.ELEC),
+      analyze(
+        "1",
+        "Computer Graphics (CGIP)",
+        attendance.cgip_attended,
+        held.CGIP,
+        total.CGIP,
+      ),
+      analyze(
+        "2",
+        "Compiler Design (CD)",
+        attendance.cd_attended,
+        held.CD,
+        total.CD,
+      ),
+      analyze(
+        "3",
+        "Industrial Economics (IEFT)",
+        attendance.ieft_attended,
+        held.IEFT,
+        total.IEFT,
+      ),
+      analyze(
+        "4",
+        "Algorithm Analysis (AAD)",
+        attendance.aad_attended,
+        held.AAD,
+        total.AAD,
+      ),
+      analyze(
+        "5",
+        "Elective (ELEC)",
+        attendance.elec_attended,
+        held.ELEC,
+        total.ELEC,
+      ),
     ];
 
     res.status(200).json(analysisData);
@@ -314,59 +368,61 @@ app.get("/api/subject-analysis/:student_id", async (req, res) => {
 // Endpoint 5: Save the FCM Token to Supabase (POST)
 // ---------------------------------------------------------
 app.post("/api/notifications/register", async (req, res) => {
-    const { userId, fcmToken } = req.body;
+  const { userId, fcmToken } = req.body;
 
-    if (!userId || !fcmToken) {
-        return res.status(400).json({ error: "Missing userId or fcmToken" });
+  if (!userId || !fcmToken) {
+    return res.status(400).json({ error: "Missing userId or fcmToken" });
+  }
+
+  try {
+    const { data, error: dbError } = await supabase
+      .from("profiles")
+      .update({ fcm_token: fcmToken })
+      .eq("id", userId)
+      .select();
+
+    if (dbError) throw dbError;
+
+    if (!data || data.length === 0) {
+      return res
+        .status(404)
+        .json({ error: "User not found or update blocked by RLS" });
     }
 
-    try {
-        const { data, error: dbError } = await supabase
-            .from("profiles")
-            .update({ fcm_token: fcmToken })
-            .eq("id", userId)
-            .select();
-
-        if (dbError) throw dbError;
-
-        if (!data || data.length === 0) {
-            return res.status(404).json({ error: "User not found or update blocked by RLS" });
-        }
-
-        console.log(`Successfully registered token for user ${userId}`);
-        res.status(200).json({ message: "Token registered successfully", data });
-    } catch (error) {
-        console.error("Error saving token:", error);
-        res.status(500).json({ error: "Failed to register token" });
-    }
+    console.log(`Successfully registered token for user ${userId}`);
+    res.status(200).json({ message: "Token registered successfully", data });
+  } catch (error) {
+    console.error("Error saving token:", error);
+    res.status(500).json({ error: "Failed to register token" });
+  }
 });
 
 // ---------------------------------------------------------
 // Endpoint 6: Trigger a Push Notification (POST)
 // ---------------------------------------------------------
 app.post("/api/notifications/send", async (req, res) => {
-    const { targetToken, title, body } = req.body;
+  const { targetToken, title, body } = req.body;
 
-    if (!targetToken) {
-        return res.status(400).json({ error: "Target token is required" });
-    }
+  if (!targetToken) {
+    return res.status(400).json({ error: "Target token is required" });
+  }
 
-    const message = {
-        notification: {
-            title: title || "AcadAlert Update",
-            body: body || "Check your dashboard for new insights."
-        },
-        token: targetToken
-    };
+  const message = {
+    notification: {
+      title: title || "AcadAlert Update",
+      body: body || "Check your dashboard for new insights.",
+    },
+    token: targetToken,
+  };
 
-    try {
-        const response = await admin.messaging().send(message);
-        console.log("Successfully sent message:", response);
-        res.status(200).json({ success: true, messageId: response });
-    } catch (error) {
-        console.error("Error sending message:", error);
-        res.status(500).json({ error: "Failed to send notification" });
-    }
+  try {
+    const response = await admin.messaging().send(message);
+    console.log("Successfully sent message:", response);
+    res.status(200).json({ success: true, messageId: response });
+  } catch (error) {
+    console.error("Error sending message:", error);
+    res.status(500).json({ error: "Failed to send notification" });
+  }
 });
 
 // ---------------------------------------------------------
@@ -452,6 +508,156 @@ cron.schedule("* * * * *", async () => {
     }
   } catch (err) {
     console.error("Cron job error:", err);
+  }
+});
+
+// ---------------------------------------------------------
+// 1. Fetch All Assignments (GET)
+// ---------------------------------------------------------
+app.get("/api/assignments", async (req, res) => {
+  try {
+    // A. Fetch all assignments from the database
+    const { data: assignments, error: assignError } = await supabase
+      .from("assignments")
+      .select("*")
+      .order("created_at", { ascending: false }); // Newest first
+
+    if (assignError) throw assignError;
+
+    // B. Fetch all graded statuses
+    const { data: statuses, error: statusError } = await supabase
+      .from("assignment_status")
+      .select("*")
+      .not("assignment_score", "is", null);
+
+    if (statusError) throw statusError;
+
+    // C. Format the data to match the React Native frontend exactly!
+    const formattedAssignments = assignments.map((assign) => {
+      const submissionsDict = {};
+
+      // Find all grades for this specific assignment and map them to the student ID
+      statuses
+        .filter((s) => s.assignment_id === assign.assignment_id)
+        .forEach((s) => {
+          submissionsDict[s.student_id] = s.assignment_score;
+        });
+
+      return {
+        id: assign.assignment_id,
+        subject: assign.subject,
+        description: assign.description,
+        dueDate: assign.due_date,
+        submissions: submissionsDict, // { "S01": 7.5, "S02": 6.0 }
+      };
+    });
+
+    res.status(200).json(formattedAssignments);
+  } catch (error) {
+    console.error("Fetch Assignments Error:", error);
+    res.status(500).json({ error: "Failed to fetch assignments" });
+  }
+});
+
+// ---------------------------------------------------------
+// 2. Create New Assignment (POST)
+// ---------------------------------------------------------
+app.post("/api/assignments", async (req, res) => {
+  try {
+    const { subject, description, dueDate } = req.body;
+
+    const { data, error } = await supabase
+      .from("assignments")
+      .insert([{ subject, description, due_date: dueDate }])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json(data);
+  } catch (error) {
+    console.error("Create Assignment Error:", error);
+    res.status(500).json({ error: "Failed to create assignment" });
+  }
+});
+
+// ---------------------------------------------------------
+// 3. Grade an Assignment (POST)
+// ---------------------------------------------------------
+app.post("/api/assignments/grade", async (req, res) => {
+  try {
+    const { studentId, assignmentId, score } = req.body;
+
+    // Using UPSERT: If a record exists for this student/assignment, it updates it.
+    // If it doesn't exist, it creates it.
+    const { error } = await supabase.from("assignment_status").upsert(
+      {
+        student_id: studentId,
+        assignment_id: assignmentId,
+        assignment_score: score, // Can be a number (7.5) or null (if cleared)
+        status: score !== null, // Automatically set status to true if graded
+      },
+      { onConflict: "student_id, assignment_id" },
+    );
+
+    if (error) throw error;
+
+    res.status(200).json({ message: "Grade saved successfully" });
+  } catch (error) {
+    console.error("Grading Error:", error);
+    res.status(500).json({ error: "Failed to save grade" });
+  }
+});
+
+// ---------------------------------------------------------
+// Fetch Student-Specific Assignments (GET)
+// ---------------------------------------------------------
+app.get("/api/student/assignments/:student_id", async (req, res) => {
+  try {
+    const { student_id } = req.params;
+
+    // 1. Fetch all assignments for the class
+    const { data: assignments, error: assignError } = await supabase
+      .from("assignments")
+      .select("*")
+      .order("due_date", { ascending: true });
+
+    if (assignError) throw assignError;
+
+    // 2. Fetch this specific student's tracking records
+    const { data: statuses, error: statusError } = await supabase
+      .from("assignment_status")
+      .select("*")
+      .eq("student_id", student_id);
+
+    if (statusError) throw statusError;
+
+    // 3. Merge the data together for the frontend
+    const formattedData = assignments.map((assign) => {
+      // Look for a matching record in the assignment_status table
+      const studentStatus = statuses.find(
+        (s) => s.assignment_id === assign.assignment_id,
+      );
+
+      // Extract the boolean status and the numeric score
+      const isSubmitted = studentStatus ? studentStatus.status : false;
+      const score = studentStatus ? studentStatus.assignment_score : null;
+
+      return {
+        id: assign.assignment_id,
+        subject: assign.subject,
+        description: assign.description,
+        dueDate: assign.due_date,
+        // THIS is the exact translation your React app needs:
+        status: isSubmitted ? "Submitted" : "Pending",
+        score: score,
+      };
+    });
+
+    res.status(200).json(formattedData);
+  } catch (error) {
+    console.error("Student Assignments Error:", error);
+    res.status(500).json({ error: "Failed to fetch student assignments" });
   }
 });
 
