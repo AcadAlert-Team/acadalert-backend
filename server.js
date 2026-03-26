@@ -456,29 +456,19 @@ cron.schedule("* * * * *", async () => {
       );
 
       for (const task of assignments) {
-        console.log(
-          `➡️ Processing task: "${task.title}" for user: ${task.user_id}`,
-        );
-        console.log("➡️ Joined student data:", task.students);
-
-        let token = null;
-        if (Array.isArray(task.students)) {
-          token = task.students[0]?.fcm_token;
-        } else {
-          token = task.students?.fcm_token;
-        }
-
-        console.log("➡️ Extracted Token:", token);
+        const token = Array.isArray(task.students)
+          ? task.students[0]?.fcm_token
+          : task.students?.fcm_token;
 
         if (!token) {
-          console.log(
-            "❌ FAILED: Token is missing or Supabase RLS blocked the profile read!",
-          );
           continue;
         }
 
+        console.log(
+          `📲 Sending Push Notification: "${task.title}" to active device...`,
+        );
+
         try {
-          console.log("➡️ Attempting to send payload to Firebase...");
           const message = {
             notification: {
               title: "Assignment Due! ⏰",
