@@ -7,6 +7,9 @@ const cron = require("node-cron");
 const { calculateClasses, collegeConfig } = require("./attendanceCalculator");
 const admin = require("./firebase"); // <-- Your crucial push notification import!
 
+// PORTFOLIO DEMO MODE: Freeze time to mid-semester so predictive analytics work.
+const DEMO_DATE = "2026-03-15";
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -26,7 +29,7 @@ app.post("/api/sync-attendance", async (req, res) => {
 
     const classesHeldSoFar = calculateClasses(
       collegeConfig.semester_start_date,
-      new Date().toISOString().split("T")[0],
+      DEMO_DATE,
     );
     const totalSemesterClasses = calculateClasses(
       collegeConfig.semester_start_date,
@@ -110,6 +113,11 @@ app.get("/api/dashboard/:student_id", async (req, res) => {
       .eq("student_id", student_id)
       .single();
 
+    const classesHeldSoFar = calculateClasses(
+      collegeConfig.semester_start_date,
+      DEMO_DATE,
+    );
+
     let attendancePercentage = 100;
 
     if (attendance) {
@@ -119,11 +127,6 @@ app.get("/api/dashboard/:student_id", async (req, res) => {
         (attendance.ieft_attended || 0) +
         (attendance.aad_attended || 0) +
         (attendance.elec_attended || 0);
-
-      const classesHeldSoFar = calculateClasses(
-        collegeConfig.semester_start_date,
-        new Date().toISOString().split("T")[0],
-      );
 
       const totalHeld =
         (classesHeldSoFar.CGIP || 0) +
@@ -160,6 +163,25 @@ app.get("/api/dashboard/:student_id", async (req, res) => {
       confidenceScores = mlResponse.data.confidence || {};
     } catch (mlError) {
       console.error("FastAPI API Unreachable");
+    }
+
+    // SMART DEMO GUARDRAIL
+    // 1. Check individual subject failure (specifically Elective for this demo)
+    const elecAttended = attendance ? attendance.elec_attended || 0 : 0;
+    const elecHeld = classesHeldSoFar.ELEC || 1;
+    const elecPercent = Math.round((elecAttended / elecHeld) * 100);
+
+    if (elecPercent < 75 && attendancePercentage >= 75) {
+      // Overall is fine, but Elective is failing.
+      riskLevel = "MEDIUM";
+      aiInsight = `WARNING: Overall attendance is safe, but Elective (ELEC) is critically low (${elecPercent}%). Prepare Condonation request or valid medical certificate immediately.`;
+    } else if (attendancePercentage < 65) {
+      riskLevel = "HIGH";
+      aiInsight =
+        "CRITICAL: Attendance has fallen below university minimums. Immediate intervention required.";
+    } else if (riskLevel === "LOW" && student.backlogs === 0) {
+      aiInsight =
+        "Student is completely on track across all subjects. No immediate action required.";
     }
 
     res.status(200).json({
@@ -199,7 +221,7 @@ app.get("/api/faculty/students", async (req, res) => {
     // 3. Calculate how many total classes have happened this semester
     const classesHeldSoFar = calculateClasses(
       collegeConfig.semester_start_date,
-      new Date().toISOString().split("T")[0],
+      DEMO_DATE,
     );
 
     const totalHeld =
@@ -230,9 +252,9 @@ app.get("/api/faculty/students", async (req, res) => {
       // 5. Basic risk heuristic for the list view
       // (We skip hitting the Python ML server here to keep the list loading instantly)
       let listRisk = "LOW";
-      if (attendancePercentage < 75 || student.backlogs > 2) {
+      if (attendancePercentage < 65 || student.backlogs > 3) {
         listRisk = "HIGH";
-      } else if (attendancePercentage < 80 || student.backlogs > 0) {
+      } else if (attendancePercentage < 75 || student.backlogs > 0) {
         listRisk = "MEDIUM";
       }
 
@@ -268,7 +290,7 @@ app.get("/api/subject-analysis/:student_id", async (req, res) => {
 
     const held = calculateClasses(
       collegeConfig.semester_start_date,
-      new Date().toISOString().split("T")[0],
+      DEMO_DATE,
     );
     const total = calculateClasses(
       collegeConfig.semester_start_date,
@@ -376,7 +398,7 @@ app.post("/api/notifications/register", async (req, res) => {
 
   try {
     const { data, error: dbError } = await supabase
-      .from("profiles")
+      .from("students")
       .update({ fcm_token: fcmToken })
       .eq("id", userId)
       .select();
@@ -442,7 +464,7 @@ cron.schedule("* * * * *", async () => {
         title, 
         user_id,
         students ( fcm_token )
-      `,
+      `
       )
       .lte("due_date", now)
       .eq("is_completed", false)
@@ -452,8 +474,11 @@ cron.schedule("* * * * *", async () => {
 
     if (assignments && assignments.length > 0) {
       console.log(
-        `🚨 Found ${assignments.length} assignments due! Sending alerts...`,
+        `🚨 Found ${assignments.length} assignments due! Sending alerts...`
       );
+
+      // ✅ THE FIX: Create a memory bank to prevent duplicate push notifications
+      const sentAlerts = new Set();
 
       for (const task of assignments) {
         const token = Array.isArray(task.students)
@@ -464,8 +489,23 @@ cron.schedule("* * * * *", async () => {
           continue;
         }
 
+        // Create a unique fingerprint combining the phone's token and the assignment title
+        const alertFingerprint = `${token}_${task.title}`;
+
+        // If this exact phone already got this exact assignment, update DB but SKIP the push!
+        if (sentAlerts.has(alertFingerprint)) {
+          await supabase
+            .from("pending_assignments")
+            .update({ notification_sent: true })
+            .eq("id", task.id);
+          continue; 
+        }
+
+        // Register this fingerprint so it doesn't get sent again
+        sentAlerts.add(alertFingerprint);
+
         console.log(
-          `📲 Sending Push Notification: "${task.title}" to active device...`,
+          `📲 Sending Push Notification: "${task.title}" to active device...`
         );
 
         try {
@@ -491,8 +531,13 @@ cron.schedule("* * * * *", async () => {
         } catch (innerError) {
           console.error(
             `❌ FIREBASE/DB ERROR for task ${task.id}:`,
-            innerError.message,
+            innerError.message
           );
+
+          await supabase
+            .from("pending_assignments")
+            .update({ notification_sent: true })
+            .eq("id", task.id);
         }
       }
     }
@@ -500,7 +545,6 @@ cron.schedule("* * * * *", async () => {
     console.error("Cron job error:", err);
   }
 });
-
 // ---------------------------------------------------------
 // 1. Fetch All Assignments (GET)
 // ---------------------------------------------------------
