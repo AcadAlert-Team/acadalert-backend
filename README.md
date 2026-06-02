@@ -3,7 +3,7 @@
 This repository contains the Node.js/Express backend and Firebase notification engine for the **AcadAlert** microservice architecture. 
 
 **This is a sub-repository.** For the full system architecture, live demo video, and frontend React Native code, please visit the main repository:
-👉 **[INSERT LINK TO YOUR MOBILE REPO HERE]**
+👉 **[LINK TO MOBILE REPO HERE](https://github.com/AcadAlert-Team/acadalert-mobile)]**
 
 ### 🏗️ Microservice Responsibilities
 * **Database Routing:** Interfaces with Supabase PostgreSQL to handle all student and faculty data transactions.
