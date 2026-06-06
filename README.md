@@ -15,5 +15,4 @@ This repository contains the Node.js/Express backend and Firebase notification e
 ## 🛠️ Tech Stack
 Node.js, Express.js, Supabase JS Client, Firebase Admin SDK, node-cron, AWS SDK (S3), PM2
 
-### Tech Stack
-* Node.js, Express.js, Supabase JS Client, Firebase Admin SDK, node-cron
+
