@@ -534,10 +534,17 @@ cron.schedule("* * * * *", async () => {
             innerError.message
           );
 
-          await supabase
-            .from("pending_assignments")
-            .update({ notification_sent: true })
-            .eq("id", task.id);
+          // ==========================================
+          // DATA ENGINEERING UPGRADE: Dead Letter Queue (DLQ)
+          // ==========================================
+          // Instead of losing the failed record, route it to a DLQ table for automated retries later.
+          await supabase.from("dlq_failed_notifications").insert([{
+              assignment_id: task.id,
+              target_token: token,
+              error_reason: innerError.message,
+              failed_at: new Date().toISOString(),
+              retry_count: 0
+          }]);
         }
       }
     }
@@ -622,8 +629,7 @@ app.post("/api/assignments/grade", async (req, res) => {
   try {
     const { studentId, assignmentId, score } = req.body;
 
-    // Using UPSERT: If a record exists for this student/assignment, it updates it.
-    // If it doesn't exist, it creates it.
+    // DATA PIPELINE INTEGRITY: Utilizing UPSERT (Insert on Conflict DO UPDATE) to guarantee pipeline idempotency and prevent duplicate records during network retries.
     const { error } = await supabase.from("assignment_status").upsert(
       {
         student_id: studentId,
